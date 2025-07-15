@@ -1,11 +1,9 @@
-name: Build Executables
+name: Build and Release
 
 on:
+  release:
+    types: [created]
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    tags:
-      - 'v*'
 
 jobs:
   build:
@@ -21,8 +19,7 @@ jobs:
             artifact_name: ftp-sync-macos
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -38,7 +35,15 @@ jobs:
       run: |
         pyinstaller --onefile --name ${{ matrix.artifact_name }} ftp_sync.py
 
-    - name: Upload artifact
+    - name: Upload to Release
+      if: github.event.release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: dist/${{ matrix.artifact_name }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload as Artifact
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.artifact_name }}
