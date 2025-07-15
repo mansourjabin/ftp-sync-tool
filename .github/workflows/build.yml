@@ -1,167 +1,107 @@
-name: Build and Auto Release
+name: Build and Release
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'ftp_sync.py'
-      - '.github/workflows/**'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., 1.0.1)'
+        description: 'Version (e.g., 1.0.2)'
         required: true
-        default: '1.0.0'
+        default: '1.0.2'
 
 jobs:
-  build-and-release:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: ftp-sync-linux
+            path: dist/ftp-sync-linux
+          - os: windows-latest
+            name: ftp-sync-windows.exe
+            path: dist/ftp-sync-windows.exe
+          - os: macos-latest
+            name: ftp-sync-macos
+            path: dist/ftp-sync-macos
+            
+    runs-on: ${{ matrix.os }}
     
     steps:
     - uses: actions/checkout@v4
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-
-    # Determine version
-    - name: Get version
-      id: version
-      run: |
-        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-          echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-        else
-          # Auto increment version
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          VERSION=${LATEST_TAG#v}
-          IFS='.' read -ra PARTS <<< "$VERSION"
-          PATCH=$((PARTS[2] + 1))
-          NEW_VERSION="${PARTS[0]}.${PARTS[1]}.$PATCH"
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-        fi
-
-    # Build executables
+    
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-
+        
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller colorama
-
-    # Build for all platforms
-    - name: Build Linux
-      run: |
-        pyinstaller --onefile --name ftp-sync-linux ftp_sync.py
         
-    - name: Build Windows
+    - name: Build executable
       run: |
-        # Use wine for cross-compilation
-        sudo apt-get update
-        sudo apt-get install -y wine wine32 wine64
-        pip install pyinstaller --target /tmp/win_py
-        wine python -m pip install pyinstaller colorama
-        wine pyinstaller --onefile --name ftp-sync-windows.exe ftp_sync.py
-
-    # Create Release
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        pyinstaller --onefile --name ${{ matrix.name }} ftp_sync.py
+        
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
       with:
-        tag_name: v${{ steps.version.outputs.version }}
-        release_name: Release v${{ steps.version.outputs.version }}
+        name: ${{ matrix.name }}
+        path: ${{ matrix.path }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: dist/
+        
+    - name: Display structure
+      run: ls -la dist/
+      
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ github.event.inputs.version }}
+        name: FTP Sync Tool v${{ github.event.inputs.version }}
         body: |
-          ## 🚀 FTP Sync Tool v${{ steps.version.outputs.version }}
-          
-          ### ✨ What's New
-          - Automated release with GitHub Actions
-          - Cross-platform executables
+          ## 🚀 FTP Sync Tool v${{ github.event.inputs.version }}
           
           ### 📦 Downloads
-          - **Windows**: `ftp-sync-windows.exe`
-          - **Linux**: `ftp-sync-linux`
-          - **macOS**: Coming soon
+          - **Windows**: [ftp-sync-windows.exe](https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/ftp-sync-windows.exe)
+          - **Linux**: [ftp-sync-linux](https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/ftp-sync-linux)
+          - **macOS**: [ftp-sync-macos](https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/ftp-sync-macos)
           
           ### 🔧 Installation
-          1. Download the executable for your platform
-          2. Make it executable (Linux/macOS): `chmod +x ftp-sync-*`
-          3. Run it!
-        draft: false
-        prerelease: false
-
-    # Upload Release Assets
-    - name: Upload Linux Binary
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/ftp-sync-linux
-        asset_name: ftp-sync-linux
-        asset_content_type: application/octet-stream
-
-    - name: Upload Windows Binary
-      if: success()
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/ftp-sync-windows.exe
-        asset_name: ftp-sync-windows.exe
-        asset_content_type: application/octet-stream
-
-    # Update README with new version
+          
+          **Windows**: Download and run `ftp-sync-windows.exe`
+          
+          **Linux/macOS**: 
+          ```bash
+          chmod +x ftp-sync-linux  # or ftp-sync-macos
+          ./ftp-sync-linux
+          ```
+        files: |
+          dist/ftp-sync-windows.exe/ftp-sync-windows.exe
+          dist/ftp-sync-linux/ftp-sync-linux
+          dist/ftp-sync-macos/ftp-sync-macos
+          
     - name: Update README
       run: |
-        VERSION=${{ steps.version.outputs.version }}
-        sed -i "s|download/v[0-9.]*|download/v${VERSION}|g" README.md
+        # Update version numbers in README
+        sed -i "s|download/v[0-9.]*|download/v${{ github.event.inputs.version }}|g" README.md
         
-    - name: Commit README update
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
+        # Setup git
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        
+        # Commit and push
         git add README.md
-        git diff --quiet && git diff --staged --quiet || git commit -m "Update README to version ${{ steps.version.outputs.version }}"
+        git commit -m "Update README to v${{ github.event.inputs.version }}" || echo "No changes to commit"
         git push
-
-  # Separate job for macOS
-  build-macos:
-    needs: build-and-release
-    runs-on: macos-latest
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller colorama
-        
-    - name: Build macOS
-      run: |
-        pyinstaller --onefile --name ftp-sync-macos ftp_sync.py
-        
-    - name: Get latest release
-      id: get_release
-      run: |
-        LATEST_RELEASE=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest)
-        UPLOAD_URL=$(echo $LATEST_RELEASE | jq -r .upload_url | sed 's/{?name,label}//')
-        echo "upload_url=$UPLOAD_URL" >> $GITHUB_OUTPUT
-        
-    - name: Upload macOS Binary
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.get_release.outputs.upload_url }}
-        asset_path: ./dist/ftp-sync-macos
-        asset_name: ftp-sync-macos
-        asset_content_type: application/octet-stream
